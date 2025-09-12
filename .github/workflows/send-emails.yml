@@ -1,0 +1,31 @@
+name: Send Emails
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 * * * *"
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run email sender
+        run: node send.js
+        env:
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER_MYMAIL: ${{ secrets.SMTP_USER_MYMAIL }}
+          SMTP_PASS_MYMAIL: ${{ secrets.SMTP_PASS_MYMAIL }}
+          SMTP_USER_OTHERMAIL: ${{ secrets.SMTP_USER_OTHERMAIL }}
+          SMTP_PASS_OTHERMAIL: ${{ secrets.SMTP_PASS_OTHERMAIL }}
