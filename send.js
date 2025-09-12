@@ -1,50 +1,36 @@
 require("dotenv").config();
-const fs = require("fs");
 const nodemailer = require("nodemailer");
-const path = require("path");
+const fs = require("fs");
 
-function normalizeKey(senderEmail) {
-  if (!senderEmail) return null;
-  let prefix = senderEmail.split("@")[0];
-  prefix = prefix.replace(/\./g, "");
-  return prefix.toUpperCase();
-}
+// === Load Emails & Subjects ===
+const emails = fs.readFileSync("emails.csv", "utf8").trim().split("\n").slice(1); 
+const subjects = fs.readFileSync("subjects.txt", "utf8").trim().split("\n");
 
-function getSmtpCredentials(senderEmail) {
-  const keyPrefix = normalizeKey(senderEmail);
-  const userKey = "SMTP_USER_" + keyPrefix;
-  const passKey = "SMTP_PASS_" + keyPrefix;
-
-  const user = process.env[userKey];
-  const pass = process.env[passKey];
-
-  if (!user || !pass) {
-    throw new Error(
-      `❌ Missing SMTP credentials for ${senderEmail} (expected ${userKey}, ${passKey})`
-    );
+// === Extract all SMTP accounts from .env ===
+function loadSmtpAccounts() {
+  const accounts = [];
+  for (const key in process.env) {
+    if (key.startsWith("SMTP_USER_")) {
+      const prefix = key.replace("SMTP_USER_", "");
+      accounts.push({
+        prefix,
+        user: process.env[key],
+        pass: process.env["SMTP_PASS_" + prefix],
+      });
+    }
   }
-
-  return { user, pass };
+  return accounts;
 }
 
-async function sendMail(senderEmail, recipientEmail, subject, body) {
-  const { user, pass } = getSmtpCredentials(senderEmail);
-
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: process.env.SMTP_PORT,
-    secure: false,
-    auth: { user, pass },
-  });
-
-  await transporter.sendMail({
-    from: senderEmail,
-    to: recipientEmail,
-    subject: subject,
-    html: body,
-  });
+const smtpAccounts = loadSmtpAccounts();
+if (smtpAccounts.length === 0) {
+  console.error("❌ No SMTP accounts found in .env!");
+  process.exit(1);
 }
 
+console.log(`✅ Loaded ${smtpAccounts.length} SMTP accounts`);
+
+// === Email Body Template ===
 function baseBody(name) {
   return `Hi ${name},<br><br>
 Looking to get off load boards and into better-paying freight? At Prism Distributions, we connect serious carriers like you with high-dollar, steady freight that moves fast — no hassle, no stress.<br><br>
@@ -60,46 +46,46 @@ Let's make this your most profitable week yet — real loads, real fast.<br><br>
 &#128179; EIN: 93-4662639`;
 }
 
-function readCsv(file) {
-  return fs
-    .readFileSync(file, "utf-8")
-    .trim()
-    .split("\n")
-    .slice(1)
-    .map((line) => line.split(","));
+// === Function to send mail ===
+async function sendMail(account, recipientEmail, subject, body) {
+  const transporter = nodemailer.createTransport({
+    host: "mail.inbox.lv",
+    port: 587,
+    secure: false,
+    auth: { user: account.user, pass: account.pass },
+  });
+
+  await transporter.sendMail({
+    from: account.user,
+    to: recipientEmail,
+    subject,
+    html: body,
+  });
 }
 
-function logSent(recipient, sender, subject) {
-  const logPath = path.join(__dirname, "sent_log.csv");
-  const entry = `${new Date().toISOString()},${recipient},${sender},${subject}\n`;
-  fs.appendFileSync(logPath, entry);
-}
-
+// === Main Function ===
 async function processEmails() {
-  const rows = readCsv(path.join(__dirname, "emails.csv"));
   let sentCount = 0;
+  for (let i = 0; i < emails.length; i++) {
+    const [recipientEmail, recipientName] = emails[i].split(",").map(v => v.trim());
+    if (!recipientEmail) continue;
 
-  for (let row of rows) {
-    const [recipientEmail, recipientName, subject, assignedSender, status] = row;
-    if (status.trim().toLowerCase() !== "pending") continue;
+    const subject = subjects[i % subjects.length] || `Hey ${recipientName || "Carrier"}, ready for better freight?`;
+    const body = baseBody(recipientName || "Carrier");
 
-    const emailSubject = subject || `Hey ${recipientName}, ready for better freight?`;
-    const emailBody = baseBody(recipientName || "Carrier");
+    // Pick SMTP account in rotation
+    const account = smtpAccounts[sentCount % smtpAccounts.length];
 
     try {
-      await sendMail(assignedSender, recipientEmail, emailSubject, emailBody);
-      console.log(`✅ Sent to ${recipientEmail} via ${assignedSender}`);
-      logSent(recipientEmail, assignedSender, emailSubject);
+      await sendMail(account, recipientEmail, subject, body);
+      console.log(`✅ Sent to ${recipientEmail} via ${account.user}`);
+      fs.appendFileSync("sent_log.csv", `${recipientEmail},${account.user},${new Date().toISOString()}\n`);
       sentCount++;
     } catch (err) {
-      console.error(`❌ Failed ${recipientEmail}: ${err.message}`);
+      console.error(`❌ Failed to send to ${recipientEmail}: ${err.message}`);
     }
   }
-
-  console.log(`📨 Done. Sent ${sentCount} emails this run.`);
+  console.log(`📨 Done. Sent ${sentCount} emails.`);
 }
 
-processEmails().catch((err) => {
-  console.error("Fatal error:", err);
-  process.exit(1);
-});
+processEmails();
